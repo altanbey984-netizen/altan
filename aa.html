@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Lambda BLE Kontrol Paneli</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --accent-color: #00e676;
+            --text-color: #ffffff;
+            --text-secondary: #b0bec5;
+            --danger-color: #ff5252;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 16px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .status-box {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.85rem;
+            background-color: var(--danger-color);
+            color: #000;
+        }
+
+        .status-badge.connected {
+            background-color: var(--accent-color);
+        }
+
+        button.btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            background-color: var(--accent-color);
+            color: #000;
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        button.btn:active {
+            opacity: 0.8;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .data-card {
+            background-color: #2a2a2a;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .data-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: var(--accent-color);
+            margin-top: 4px;
+        }
+
+        .data-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .slider-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 8px;
+        }
+
+        input[type=range] {
+            width: 100%;
+            accent-color: var(--accent-color);
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.1rem;
+        }
+
+        .preset-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .preset-btn {
+            background-color: #333;
+            color: #fff;
+            border: 1px solid #444;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .preset-btn:active {
+            background-color: var(--accent-color);
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <!-- BAĞLANTI KARTI -->
+    <div class="card status-box">
+        <div>
+            <div style="font-weight: bold;">ESP32 BLE Bağlantısı</div>
+            <div id="device-name" style="font-size: 0.8rem; color: var(--text-secondary);">Cihaz Seçilmedi</div>
+        </div>
+        <div id="status" class="status-badge">Bağlı Değil</div>
+    </div>
+
+    <button id="connect-btn" class="btn">Bluetooth Cihaza Bağlan</button>
+
+    <!-- CANLI VERİ PANELİ -->
+    <div class="card">
+        <h2>Canlı Lambda Verileri</h2>
+        <div class="grid">
+            <div class="data-card">
+                <div class="data-label">Giriş Volt (Sensör)</div>
+                <div id="in-volts" class="data-value">0.000 V</div>
+            </div>
+            <div class="data-card">
+                <div class="data-label">Çıkış Volt (ECU)</div>
+                <div id="out-volts" class="data-value">0.000 V</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- KESME KONTROL PANELİ -->
+    <div class="card">
+        <h2>Kesme Yüzdesi Ayarı</h2>
+        <div class="slider-container">
+            <div class="slider-header">
+                <span>Oran:</span>
+                <span id="cut-val-disp" style="font-weight: bold; color: var(--accent-color);">%5.0</span>
+            </div>
+            <input type="range" id="cut-slider" min="0" max="10" step="0.5" value="5">
+            
+            <div class="preset-buttons">
+                <button class="preset-btn" onclick="setCut(0)">%0 (Kapalı)</button>
+                <button class="preset-btn" onclick="setCut(5)">%5 (Standart)</button>
+                <button class="preset-btn" onclick="setCut(10)">%10 (Maks)</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // BLE Nordic UART Service UUID'leri
+    const UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const UART_RX_CHARACTERISTIC_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // ESP32'ye Gönderme
+    const UART_TX_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // ESP32'den Dinleme
+
+    let bleDevice = null;
+    let rxCharacteristic = null;
+    let txCharacteristic = null;
+
+    const connectBtn = document.getElementById('connect-btn');
+    const statusBadge = document.getElementById('status');
+    const deviceNameDisp = document.getElementById('device-name');
+    const inVoltsDisp = document.getElementById('in-volts');
+    const outVoltsDisp = document.getElementById('out-volts');
+    const cutSlider = document.getElementById('cut-slider');
+    const cutValDisp = document.getElementById('cut-val-disp');
+
+    connectBtn.addEventListener('click', async () => {
+        if (bleDevice && bleDevice.gatt.connected) {
+            // Zaten bağlıysa bağlantıyı kes
+            bleDevice.gatt.disconnect();
+            return;
+        }
+
+        try {
+            statusBadge.textContent = "Aranıyor...";
+            
+            // BLE Cihaz Tarama
+            bleDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: 'Lambda_' }],
+                optionalServices: [UART_SERVICE_UUID]
+            });
+
+            bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+            // GATT Sunucusuna Bağlanma
+            const server = await bleDevice.gatt.connect();
+            const service = await server.getPrimaryService(UART_SERVICE_UUID);
+
+            // Karakteristikleri Al
+            rxCharacteristic = await service.getCharacteristic(UART_RX_CHARACTERISTIC_UUID);
+            txCharacteristic = await service.getCharacteristic(UART_TX_CHARACTERISTIC_UUID);
+
+            // Bildirimleri (Notify) Dinlemeye Başla
+            await txCharacteristic.startNotifications();
+            txCharacteristic.addEventListener('characteristicvaluechanged', handleDataReceived);
+
+            // Arayüzü Güncelle
+            statusBadge.textContent = "Bağlandı";
+            statusBadge.classList.add('connected');
+            deviceNameDisp.textContent = bleDevice.name;
+            connectBtn.textContent = "Bağlantıyı Kes";
+            connectBtn.style.backgroundColor = "#ff5252";
+
+        } catch (error) {
+            console.error("BLE Hata:", error);
+            statusBadge.textContent = "Hata!";
+            alert("Bağlantı kurulamadı: " + error.message);
+        }
+    });
+
+    // ESP32'den Veri Geldiğinde Çalışır
+    function handleDataReceived(event) {
+        const decoder = new TextDecoder('utf-8');
+        const packet = decoder.decode(event.target.value).trim();
+        
+        // Örn gelen paket: "0.750,0.712,5.0"
+        const parts = packet.split(',');
+        if (parts.length === 3) {
+            inVoltsDisp.textContent = parseFloat(parts[0]).toFixed(3) + " V";
+            outVoltsDisp.textContent = parseFloat(parts[1]).toFixed(3) + " V";
+        }
+    }
+
+    // ESP32'ye Veri Gönderme Fonksiyonu
+    async function sendCutValue(val) {
+        if (!rxCharacteristic) return;
+        
+        try {
+            const command = "CUT:" + parseFloat(val).toFixed(1) + "\n";
+            const encoder = new TextEncoder();
+            await rxCharacteristic.writeValue(encoder.encode(command));
+        } catch (err) {
+            console.error("Komut gönderme hatası:", err);
+        }
+    }
+
+    // Slider Hareketi
+    cutSlider.addEventListener('input', (e) => {
+        const val = e.target.value;
+        cutValDisp.textContent = "%" + parseFloat(val).toFixed(1);
+        sendCutValue(val);
+    });
+
+    // Hazır Butonlar İçin
+    function setCut(val) {
+        cutSlider.value = val;
+        cutValDisp.textContent = "%" + parseFloat(val).toFixed(1);
+        sendCutValue(val);
+    }
+
+    // Bağlantı Koptuğunda
+    function onDisconnected() {
+        statusBadge.textContent = "Koptu";
+        statusBadge.classList.remove('connected');
+        deviceNameDisp.textContent = "Cihaz Seçilmedi";
+        connectBtn.textContent = "Bluetooth Cihaza Bağlan";
+        connectBtn.style.backgroundColor = "var(--accent-color)";
+        rxCharacteristic = null;
+        txCharacteristic = null;
+    }
+</script>
+
+</body>
+</html>
